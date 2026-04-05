@@ -1,70 +1,44 @@
-// app/api/tasks/[id]/route.js
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { query } from '@/lib/db';
-import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { query } from '@/lib/db'
 
-async function getUser() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) return null;
-  return session.user;
-}
-
-// ─── PATCH /api/tasks/:id ─────────────────────────────────────
 export async function PATCH(req, { params }) {
-  const user = await getUser();
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const body = await req.json();
-  const allowed = ['title', 'description', 'date', 'time', 'priority', 'done'];
+  const body = await req.json()
+  const fields = []
+  const values = []
+  let idx = 1
 
-  const updates = [];
-  const values  = [];
-  let i = 1;
+  if (body.completed !== undefined) { fields.push(`completed = $${idx++}`); values.push(body.completed) }
+  if (body.title !== undefined)     { fields.push(`title = $${idx++}`);     values.push(body.title) }
+  if (body.due_date !== undefined)  { fields.push(`due_date = $${idx++}`);  values.push(body.due_date) }
+  if (body.priority !== undefined)  { fields.push(`priority = $${idx++}`);  values.push(body.priority) }
+  if (body.folder_id !== undefined) { fields.push(`folder_id = $${idx++}`); values.push(body.folder_id) }
 
-  for (const field of allowed) {
-    if (body[field] !== undefined) {
-      updates.push(`${field} = $${i++}`);
-      values.push(
-        field === 'title'       ? body[field].trim() :
-        field === 'description' ? (body[field]?.trim() || null) :
-        body[field] === ''      ? null :
-        body[field]
-      );
-    }
+  // Reset notification flags when task is uncompleted or due_date changes
+  if (body.completed === false || body.due_date !== undefined) {
+    fields.push(`notified_1h = false`, `notified_1d = false`)
   }
 
-  if (!updates.length) {
-    return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
-  }
+  if (fields.length === 0) return Response.json({ error: 'Nothing to update' }, { status: 400 })
 
-  // user_id check ensures users can't modify each other's tasks
-  values.push(params.id, user.id);
-
-  const { rows } = await query(
-    `UPDATE tasks SET ${updates.join(', ')}
-     WHERE id = $${i++} AND user_id = $${i}
-     RETURNING id, title, description,
-               TO_CHAR(date, 'YYYY-MM-DD') AS date,
-               TO_CHAR(time, 'HH24:MI') AS time,
-               priority, done, created_at, updated_at`,
+  values.push(params.id, session.user.id)
+  const result = await query(
+    `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} AND user_id = $${idx+1} RETURNING *`,
     values
-  );
-
-  if (!rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  return NextResponse.json({ task: rows[0] });
+  )
+  return Response.json(result.rows[0])
 }
 
-// ─── DELETE /api/tasks/:id ────────────────────────────────────
-export async function DELETE(_, { params }) {
-  const user = await getUser();
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+export async function DELETE(req, { params }) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { rowCount } = await query(
+  await query(
     'DELETE FROM tasks WHERE id = $1 AND user_id = $2',
-    [params.id, user.id]
-  );
-
-  if (!rowCount) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  return new Response(null, { status: 204 });
+    [params.id, session.user.id]
+  )
+  return Response.json({ success: true })
 }
