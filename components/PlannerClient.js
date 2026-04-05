@@ -587,7 +587,7 @@ export default function PlannerClient() {
     <>
       {/* Global styles */}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=DM+Sans:wght@300;400;500;600&display=swap');
+        @import url(https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=DM+Sans:wght@300;400;500;600&display=swap);
 
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 

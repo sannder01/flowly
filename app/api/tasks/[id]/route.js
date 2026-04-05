@@ -4,44 +4,52 @@ import { query } from '@/lib/db'
 import { getSessionUserId } from '@/lib/session-user'
 
 export async function PATCH(req, { params }) {
-  const session = await getServerSession(authOptions)
-  const userId = getSessionUserId(session)
-  if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  try {
+    const session = await getServerSession(authOptions)
+    const userId = getSessionUserId(session)
+    if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const body = await req.json()
-  const fields = []
-  const values = []
-  let idx = 1
+    const body = await req.json()
+    const fields = []
+    const values = []
+    let idx = 1
 
-  if (body.completed !== undefined) { fields.push(`completed = $${idx++}`); values.push(body.completed) }
-  if (body.title !== undefined)     { fields.push(`title = $${idx++}`);     values.push(body.title) }
-  if (body.due_date !== undefined)  { fields.push(`due_date = $${idx++}`);  values.push(body.due_date) }
-  if (body.priority !== undefined)  { fields.push(`priority = $${idx++}`);  values.push(body.priority) }
-  if (body.folder_id !== undefined) { fields.push(`folder_id = $${idx++}`); values.push(body.folder_id) }
+    if (body.completed !== undefined) { fields.push(`completed = $${idx++}`); values.push(body.completed) }
+    if (body.title !== undefined)     { fields.push(`title = $${idx++}`);     values.push(body.title) }
+    if (body.due_date !== undefined)  { fields.push(`due_date = $${idx++}`);  values.push(body.due_date) }
+    if (body.priority !== undefined)  { fields.push(`priority = $${idx++}`);  values.push(body.priority) }
+    if (body.folder_id !== undefined) { fields.push(`folder_id = $${idx++}`); values.push(body.folder_id) }
 
-  // Reset notification flags when task is uncompleted or due_date changes
-  if (body.completed === false || body.due_date !== undefined) {
-    fields.push(`notified_1h = false`, `notified_1d = false`)
+    // Reset notification flags when task is uncompleted or due_date changes
+    if (body.completed === false || body.due_date !== undefined) {
+      fields.push(`notified_1h = false`, `notified_1d = false`)
+    }
+
+    if (fields.length === 0) return Response.json({ error: 'Nothing to update' }, { status: 400 })
+
+    values.push(params.id, userId)
+    const result = await query(
+      `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} AND user_id = $${idx+1} RETURNING *`,
+      values
+    )
+    return Response.json(result.rows[0])
+  } catch (err) {
+    return Response.json({ error: err.message || 'Failed to update task' }, { status: 500 })
   }
-
-  if (fields.length === 0) return Response.json({ error: 'Nothing to update' }, { status: 400 })
-
-  values.push(params.id, userId)
-  const result = await query(
-    `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} AND user_id = $${idx+1} RETURNING *`,
-    values
-  )
-  return Response.json(result.rows[0])
 }
 
 export async function DELETE(req, { params }) {
-  const session = await getServerSession(authOptions)
-  const userId = getSessionUserId(session)
-  if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  try {
+    const session = await getServerSession(authOptions)
+    const userId = getSessionUserId(session)
+    if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  await query(
-    'DELETE FROM tasks WHERE id = $1 AND user_id = $2',
-    [params.id, userId]
-  )
-  return Response.json({ success: true })
+    await query(
+      'DELETE FROM tasks WHERE id = $1 AND user_id = $2',
+      [params.id, userId]
+    )
+    return Response.json({ success: true })
+  } catch (err) {
+    return Response.json({ error: err.message || 'Failed to delete task' }, { status: 500 })
+  }
 }
