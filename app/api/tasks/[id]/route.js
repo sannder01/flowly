@@ -1,10 +1,12 @@
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { query } from '@/lib/db'
+import { getSessionUserId } from '@/lib/session-user'
 
 export async function PATCH(req, { params }) {
   const session = await getServerSession(authOptions)
-  if (!session?.user?.id) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = getSessionUserId(session)
+  if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await req.json()
   const fields = []
@@ -24,7 +26,7 @@ export async function PATCH(req, { params }) {
 
   if (fields.length === 0) return Response.json({ error: 'Nothing to update' }, { status: 400 })
 
-  values.push(params.id, session.user.id)
+  values.push(params.id, userId)
   const result = await query(
     `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} AND user_id = $${idx+1} RETURNING *`,
     values
@@ -34,11 +36,12 @@ export async function PATCH(req, { params }) {
 
 export async function DELETE(req, { params }) {
   const session = await getServerSession(authOptions)
-  if (!session?.user?.id) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = getSessionUserId(session)
+  if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   await query(
     'DELETE FROM tasks WHERE id = $1 AND user_id = $2',
-    [params.id, session.user.id]
+    [params.id, userId]
   )
   return Response.json({ success: true })
 }

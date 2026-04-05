@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { signOut, useSession } from 'next-auth/react'
+import { useRouter } from 'next/navigation'
 
 // ═══════════════════════════════════════════════════════════════════
 //  THEMES
@@ -190,6 +191,7 @@ const DEFAULT_FOLDERS = [
 // ═══════════════════════════════════════════════════════════════════
 export default function PlannerClient() {
   const { data: session } = useSession()
+  const router = useRouter()
   const [tasks, setTasks] = useState([])
   const [folders, setFolders] = useState([])
   const [loading, setLoading] = useState(true)
@@ -501,8 +503,13 @@ export default function PlannerClient() {
     setTimeout(() => setTgSaved(false), 2000)
   }
 
-  function handleSignOut() {
-    signOut({ callbackUrl: '/auth' })
+  async function handleSignOut() {
+    try {
+      await signOut({ redirect: false })
+    } finally {
+      router.replace('/auth')
+      router.refresh()
+    }
   }
 
   // ── Debug ───────────────────────────────────────────────────────
