@@ -1,94 +1,77 @@
-// scripts/migrate.js
-// Run: node scripts/migrate.js
-require('dotenv').config({ path: '.env.local' });
-const { Pool } = require('pg');
+// scripts/migrate-v2.js
+// Run: node scripts/migrate-v2.js
+// Adds: folders, tg_connections, notification flags to tasks
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const { Pool } = require('pg')
+require('dotenv').config({ path: '.env.local' })
 
-const SQL = `
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-
--- Users synced from NextAuth (Google profile)
-CREATE TABLE IF NOT EXISTS users (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email         TEXT NOT NULL UNIQUE,
-  name          TEXT,
-  image         TEXT,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- NextAuth accounts (Google OAuth tokens)
-CREATE TABLE IF NOT EXISTS accounts (
-  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  type                TEXT NOT NULL,
-  provider            TEXT NOT NULL,
-  provider_account_id TEXT NOT NULL,
-  refresh_token       TEXT,
-  access_token        TEXT,
-  expires_at          BIGINT,
-  token_type          TEXT,
-  scope               TEXT,
-  id_token            TEXT,
-  UNIQUE(provider, provider_account_id)
-);
-
--- NextAuth sessions
-CREATE TABLE IF NOT EXISTS sessions (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  session_token TEXT NOT NULL UNIQUE,
-  expires       TIMESTAMPTZ NOT NULL
-);
-
--- NextAuth verification tokens (magic links etc.)
-CREATE TABLE IF NOT EXISTS verification_tokens (
-  identifier TEXT NOT NULL,
-  token      TEXT NOT NULL UNIQUE,
-  expires    TIMESTAMPTZ NOT NULL,
-  PRIMARY KEY (identifier, token)
-);
-
--- Tasks
-CREATE TABLE IF NOT EXISTS tasks (
-  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  title       TEXT NOT NULL,
-  description TEXT,
-  date        DATE,
-  time        TIME,
-  priority    SMALLINT NOT NULL DEFAULT 2 CHECK (priority IN (1,2,3)),
-  done        BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_user_date ON tasks(user_id, date);
-CREATE INDEX IF NOT EXISTS idx_tasks_user_done ON tasks(user_id, done);
-
--- Auto-update updated_at
-CREATE OR REPLACE FUNCTION set_updated_at()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
-BEGIN NEW.updated_at = NOW(); RETURN NEW; END; $$;
-
-DROP TRIGGER IF EXISTS tasks_updated_at ON tasks;
-CREATE TRIGGER tasks_updated_at
-  BEFORE UPDATE ON tasks
-  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-`;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
 
 async function migrate() {
-  const client = await pool.connect();
+  const client = await pool.connect()
   try {
-    console.log('🔄 Running migrations...');
-    await client.query(SQL);
-    console.log('✅ Done.');
-  } catch (e) {
-    console.error('❌', e.message);
-    process.exit(1);
+    console.log('🚀 Running Chronicle v2 migration...')
+
+    // ── Folders table ──────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS folders (
+        id         SERIAL PRIMARY KEY,
+        user_id    TEXT NOT NULL,
+        name       TEXT NOT NULL,
+        emoji      TEXT DEFAULT '📁',
+        color      TEXT DEFAULT '#8B5CF6',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `)
+    console.log('✅ folders table ready')
+
+    // ── Add folder_id to tasks ─────────────────────────────────────
+    await client.query(`
+      ALTER TABLE tasks
+      ADD COLUMN IF NOT EXISTS folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL
+    `)
+    console.log('✅ tasks.folder_id added')
+
+    // ── Add notification flags to tasks ───────────────────────────
+    await client.query(`
+      ALTER TABLE tasks
+      ADD COLUMN IF NOT EXISTS notified_1h BOOLEAN DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS notified_1d BOOLEAN DEFAULT FALSE
+    `)
+    console.log('✅ tasks notification flags added')
+
+    // ── TG connections table ───────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tg_connections (
+        user_id    TEXT PRIMARY KEY,
+        chat_id    TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `)
+    console.log('✅ tg_connections table ready')
+
+    // ── Indexes for performance ────────────────────────────────────
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_folders_user ON folders(user_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_folder ON tasks(folder_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date) WHERE completed = false;
+    `)
+    console.log('✅ Indexes created')
+
+    console.log('\n🎉 Migration v2 complete!')
+    console.log('📋 New features enabled:')
+    console.log('   • Folders/categories for tasks')
+    console.log('   • Telegram notification tracking')
+    console.log('   • Deadline reminder flags')
+
+  } catch (err) {
+    console.error('❌ Migration error:', err.message)
+    throw err
   } finally {
-    client.release();
-    await pool.end();
+    client.release()
+    await pool.end()
   }
 }
-migrate();
+
+migrate()
