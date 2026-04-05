@@ -372,7 +372,8 @@ export default function PlannerClient() {
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}))
-        setFormError(errorData.message || `Ошибка сервера: ${res.status}`)
+        // Сервер возвращает { error: '...' }, а не { message: '...' }
+        setFormError(errorData.error || errorData.message || `Ошибка сервера: ${res.status}`)
         return
       }
 
@@ -500,9 +501,56 @@ export default function PlannerClient() {
     setTimeout(() => setTgSaved(false), 2000)
   }
 
-  // БАГ #3 ИСПРАВЛЕН: выносим handleSignOut отдельно чтобы не передавать event в signOut
   function handleSignOut() {
     signOut({ callbackUrl: '/auth' })
+  }
+
+  // ── Debug ───────────────────────────────────────────────────────
+  const [debugInfo, setDebugInfo] = useState(null)
+  const [showDebug, setShowDebug] = useState(false)
+
+  async function runDebug() {
+    const results = {}
+    results.clientSession = session
+      ? `✅ есть (id: ${session.user?.id || '❌ НЕТ ID — auth.js не исправлен!'})`
+      : '❌ нет сессии на клиенте'
+
+    try {
+      const r = await fetch('/api/tasks')
+      const body = await r.text()
+      results.getTasks = `${r.status} ${r.statusText}`
+      if (!r.ok) results.getTasksBody = body.slice(0, 300)
+    } catch(e) { results.getTasks = `fetch error: ${e.message}` }
+
+    try {
+      const r = await fetch('/api/folders')
+      const body = await r.text()
+      results.getFolders = `${r.status} ${r.statusText}`
+      if (!r.ok) results.getFoldersBody = body.slice(0, 300)
+    } catch(e) { results.getFolders = `fetch error: ${e.message}` }
+
+    try {
+      const r = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '__debug__', priority: 'low' }),
+      })
+      const body = await r.text()
+      results.postTask = `${r.status} ${r.statusText}`
+      results.postTaskBody = body.slice(0, 300)
+      if (r.ok) {
+        try {
+          const c = JSON.parse(body)
+          if (c?.id) {
+            await fetch(`/api/tasks/${c.id}`, { method: 'DELETE' })
+            results.postTask += ' (тест удалён)'
+          }
+        } catch {}
+      }
+    } catch(e) { results.postTask = `fetch error: ${e.message}` }
+
+    setDebugInfo(results)
+    setShowDebug(true)
   }
 
   // ── Filtered tasks ──────────────────────────────────────────────
@@ -1041,9 +1089,52 @@ export default function PlannerClient() {
               <span style={{ fontSize: 18 }}>{showForm ? '✕' : '+'}</span>
               <span>{showForm ? 'Отмена' : 'Задание'}</span>
             </button>
+
+            {/* Кнопка диагностики — удали после починки */}
+            <button onClick={runDebug} title="Диагностика" style={{
+              background: 'rgba(255,255,100,0.1)',
+              border: '1px solid rgba(255,255,100,0.3)',
+              color: '#FFD700',
+              borderRadius: 14,
+              padding: '12px 14px',
+              cursor: 'pointer',
+              fontSize: 16,
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}>
+              🔍
+            </button>
           </div>
 
           {/* ── CREATE TASK FORM ── */}
+          {/* ── DEBUG PANEL (удали после того как всё заработает) ── */}
+          {showDebug && debugInfo && (
+            <div style={{
+              background: 'rgba(0,0,0,0.8)',
+              border: '1px solid rgba(255,255,100,0.4)',
+              borderRadius: 12,
+              padding: 16,
+              marginBottom: 20,
+              fontSize: 12,
+              fontFamily: 'monospace',
+              color: '#fff',
+              animation: 'fadeUp 0.3s ease',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+                <span style={{ color: '#FFD700', fontWeight: 700 }}>🔍 Диагностика</span>
+                <button onClick={() => setShowDebug(false)} style={{ background: 'none', border: 'none', color: '#999', cursor: 'pointer', fontSize: 16 }}>✕</button>
+              </div>
+              {Object.entries(debugInfo).map(([key, val]) => (
+                <div key={key} style={{ marginBottom: 6 }}>
+                  <span style={{ color: '#aaa' }}>{key}: </span>
+                  <span style={{ color: val?.includes?.('❌') || val?.includes?.('401') || val?.includes?.('500') ? '#FF4466' : val?.includes?.('✅') || val?.includes?.('200') || val?.includes?.('201') ? '#00E887' : '#FFD700' }}>
+                    {val}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {showForm && (
             <div style={{
               background: t.card,
