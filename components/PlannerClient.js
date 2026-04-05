@@ -215,7 +215,7 @@ export default function PlannerClient() {
   const [folderForm, setFolderForm] = useState({ name: '', emoji: '📁', color: '#8B5CF6' })
 
   // Delete confirmation
-  const [deleteConfirm, setDeleteConfirm] = useState(null) // { id, title }
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
 
   // TG connect
   const [showTgPanel, setShowTgPanel] = useState(false)
@@ -272,7 +272,6 @@ export default function PlannerClient() {
     resize()
     window.addEventListener('resize', resize)
 
-    // Init particles
     const count = 120
     particlesRef.current = Array.from({ length: count }, () => ({
       x: Math.random() * canvas.width,
@@ -328,11 +327,9 @@ export default function PlannerClient() {
       setTasks(Array.isArray(tasksData) ? tasksData : [])
       setFolders(Array.isArray(foldersData) ? foldersData : [])
 
-      // Cache for PWA/iOS
       localStorage.setItem('chronicle_tasks_cache', JSON.stringify(tasksData))
       localStorage.setItem('chronicle_folders_cache', JSON.stringify(foldersData))
     } catch (err) {
-      // Fallback to cache for offline/PWA
       const cachedTasks = localStorage.getItem('chronicle_tasks_cache')
       const cachedFolders = localStorage.getItem('chronicle_folders_cache')
       if (cachedTasks) setTasks(JSON.parse(cachedTasks))
@@ -342,68 +339,64 @@ export default function PlannerClient() {
   }
 
   // ── Task CRUD ───────────────────────────────────────────────────
-    async function createTask(e) {
+  async function createTask(e) {
     e.preventDefault()
-    
-    // 1. Валидация
-    if (!formData.title.trim()) { 
+
+    if (!formData.title.trim()) {
       setFormError('Введи название задания')
-      return 
+      return
     }
     setFormError('')
-  
-    // 2. Логика определения папки
-    // Если activeFolder — это ID (не системные вкладки), берем его. 
-    // Если системная (all, today, urgent) — ставим null.
-    const currentFolderId = ['all', 'today', 'urgent'].includes(activeFolder) 
-      ? null 
-      : activeFolder
-  
-    const newTask = { 
-      ...formData, 
+
+    // БАГ #1 ИСПРАВЛЕН: используем folder_id из формы, а не activeFolder
+    // Если в форме выбрана папка — берём её.
+    // Если не выбрана — пробуем взять activeFolder (только если это реальная папка, не системная).
+    const SYSTEM_FOLDERS = ['all', 'today', 'urgent']
+    const folderIdFromForm = formData.folder_id ? String(formData.folder_id) : null
+    const folderIdFromNav = !SYSTEM_FOLDERS.includes(activeFolder) ? String(activeFolder) : null
+    const finalFolderId = folderIdFromForm || folderIdFromNav || null
+
+    const newTask = {
       title: formData.title.trim(),
-      folder_id: currentFolderId // Теперь отправляем валидный ID или null
+      due_date: formData.due_date || null,
+      priority: formData.priority,
+      folder_id: finalFolderId,
     }
-  
+
     try {
       const res = await fetch('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newTask),
       })
-  
+
       if (!res.ok) {
-        const errorData = await res.json()
-        setFormError(errorData.message || 'Ошибка при создании')
+        const errorData = await res.json().catch(() => ({}))
+        setFormError(errorData.message || `Ошибка сервера: ${res.status}`)
         return
       }
-  
+
       const created = await res.json()
-      
-      // 3. Обновляем стейт и кеш
       const updated = [created, ...tasks]
       setTasks(updated)
       localStorage.setItem('chronicle_tasks_cache', JSON.stringify(updated))
-  
-      // 4. Сброс формы
+
       setFormData({ title: '', due_date: '', priority: 'medium', folder_id: '' })
       setShowForm(false)
-      
+
     } catch (err) {
       setFormError('Ошибка соединения с сервером')
-      console.error("Create task error:", err)
+      console.error('Create task error:', err)
     }
   }
 
   async function toggleTask(task) {
     const wasCompleted = task.completed
-    // Optimistic update
-    const updated = tasks.map(t => t.id === task.id ? { ...t, completed: !t.completed } : t)
+    const updated = tasks.map(tk => tk.id === task.id ? { ...tk, completed: !tk.completed } : tk)
     setTasks(updated)
     localStorage.setItem('chronicle_tasks_cache', JSON.stringify(updated))
 
     if (!wasCompleted) {
-      // Awarding XP
       const earned = getXP(task.priority)
       const oldXp = xp
       const newXp = xp + earned
@@ -412,18 +405,15 @@ export default function PlannerClient() {
       setXp(newXp)
       localStorage.setItem('chronicle_xp', String(newXp))
 
-      // Floating XP animation
       const id = Date.now()
       setFloatingXP(prev => [...prev, { id, xp: earned }])
       setTimeout(() => setFloatingXP(prev => prev.filter(x => x.id !== id)), 2000)
 
-      // Level up?
       if (oldRank.rank !== newRank.rank) {
         setLevelUpData(newRank)
         setTimeout(() => setLevelUpData(null), 4000)
       }
     } else {
-      // Losing XP on un-complete
       const lost = getXP(task.priority)
       const newXp = Math.max(0, xp - lost)
       setXp(newXp)
@@ -437,13 +427,12 @@ export default function PlannerClient() {
         body: JSON.stringify({ completed: !wasCompleted }),
       })
     } catch {
-      // Revert on error
       setTasks(tasks)
     }
   }
 
   async function deleteTask(id) {
-    const updated = tasks.filter(t => t.id !== id)
+    const updated = tasks.filter(tk => tk.id !== id)
     setTasks(updated)
     localStorage.setItem('chronicle_tasks_cache', JSON.stringify(updated))
     setDeleteConfirm(null)
@@ -456,19 +445,36 @@ export default function PlannerClient() {
   async function createFolder(e) {
     e.preventDefault()
     if (!folderForm.name.trim()) return
+
     try {
       const res = await fetch('/api/folders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(folderForm),
       })
+
+      // БАГ #2 ИСПРАВЛЕН: проверяем res.ok перед тем как читать данные
+      if (!res.ok) {
+        console.error('Create folder error:', res.status)
+        return
+      }
+
       const created = await res.json()
+
+      // Доп. защита: проверяем что пришёл объект с id
+      if (!created || !created.id) {
+        console.error('Create folder: invalid response', created)
+        return
+      }
+
       const updated = [...folders, created]
       setFolders(updated)
       localStorage.setItem('chronicle_folders_cache', JSON.stringify(updated))
       setFolderForm({ name: '', emoji: '📁', color: '#8B5CF6' })
       setShowFolderForm(false)
-    } catch {}
+    } catch (err) {
+      console.error('Create folder exception:', err)
+    }
   }
 
   async function deleteFolder(id) {
@@ -494,6 +500,11 @@ export default function PlannerClient() {
     setTimeout(() => setTgSaved(false), 2000)
   }
 
+  // БАГ #3 ИСПРАВЛЕН: выносим handleSignOut отдельно чтобы не передавать event в signOut
+  function handleSignOut() {
+    signOut({ callbackUrl: '/auth' })
+  }
+
   // ── Filtered tasks ──────────────────────────────────────────────
   const filteredTasks = tasks.filter(task => {
     if (activeFolder === 'urgent') {
@@ -508,7 +519,7 @@ export default function PlannerClient() {
     return String(task.folder_id) === String(activeFolder)
   })
 
-  const completedCount = tasks.filter(t => t.completed).length
+  const completedCount = tasks.filter(tk => tk.completed).length
   const totalCount = tasks.length
   const rankInfo = getRank(xp)
   const { progress: xpProgress, needed: xpNeeded } = xpToNextRank(xp)
@@ -542,12 +553,10 @@ export default function PlannerClient() {
           --glow: rgba(245,75,100,0.25);
         }
 
-        /* Scrollbar */
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
 
-        /* Animations */
         @keyframes fadeUp {
           from { opacity: 0; transform: translateY(16px); }
           to   { opacity: 1; transform: translateY(0); }
@@ -578,10 +587,6 @@ export default function PlannerClient() {
           from { transform: translateX(-100%); }
           to   { transform: translateX(0); }
         }
-        @keyframes checkmark {
-          from { stroke-dashoffset: 24; }
-          to   { stroke-dashoffset: 0; }
-        }
         @keyframes shimmer {
           0%   { background-position: -200% center; }
           100% { background-position: 200% center; }
@@ -594,17 +599,10 @@ export default function PlannerClient() {
           80%       { transform: translateX(3px); }
         }
 
-        .task-card {
-          animation: fadeUp 0.35s ease forwards;
-        }
-        .task-card:hover {
-          transform: translateY(-2px);
-        }
-        .folder-item {
-          animation: fadeUp 0.25s ease forwards;
-        }
+        .task-card { animation: fadeUp 0.35s ease forwards; }
+        .task-card:hover { transform: translateY(-2px); }
+        .folder-item { animation: fadeUp 0.25s ease forwards; }
 
-        /* Mobile */
         @media (max-width: 768px) {
           .sidebar-desktop { display: none !important; }
           .main-content { margin-left: 0 !important; }
@@ -615,7 +613,6 @@ export default function PlannerClient() {
           .mobile-sidebar-btn { display: none !important; }
         }
 
-        /* PWA safe areas */
         .app-root {
           padding-top: env(safe-area-inset-top);
           padding-bottom: env(safe-area-inset-bottom);
@@ -623,15 +620,15 @@ export default function PlannerClient() {
 
         input, select, button { font-family: 'DM Sans', sans-serif; }
 
-        /* Gradient text */
         .gradient-text {
           background: linear-gradient(135deg, var(--primary), var(--primary-end));
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
           background-clip: text;
+          /* БАГ #4 ИСПРАВЛЕН: fallback цвет для браузеров без поддержки */
+          color: var(--primary);
         }
 
-        /* Shimmer button effect */
         .shimmer-btn {
           background: linear-gradient(90deg,
             var(--primary) 0%,
@@ -641,22 +638,34 @@ export default function PlannerClient() {
             var(--primary) 100%);
           background-size: 200% auto;
         }
-        .shimmer-btn:hover {
-          animation: shimmer 1.5s linear infinite;
-        }
+        .shimmer-btn:hover { animation: shimmer 1.5s linear infinite; }
 
-        /* XP bar */
-        .xp-bar-fill {
-          transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);
-        }
+        .xp-bar-fill { transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1); }
 
-        .delete-confirm-card {
-          animation: shake 0.4s ease;
-        }
+        .delete-confirm-card { animation: shake 0.4s ease; }
 
         .task-complete-line {
           text-decoration-thickness: 1px;
           text-decoration-color: rgba(255,255,255,0.3);
+        }
+
+        /* БАГ #4 ИСПРАВЛЕН: Chronicle логотип — явный градиент без потери текста */
+        .logo-text {
+          font-family: 'Cinzel', serif;
+          font-size: 22px;
+          font-weight: 700;
+          letter-spacing: -0.02em;
+          background: linear-gradient(135deg, var(--primary), var(--primary-end));
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+          color: var(--primary);
+          display: inline-block;
+        }
+
+        /* Кнопки сайдбара — hover эффект */
+        .sidebar-action-btn:hover {
+          background: rgba(255,255,255,0.06) !important;
         }
       `}</style>
 
@@ -711,7 +720,6 @@ export default function PlannerClient() {
             <div style={{ fontSize: 20, color: t.text, marginTop: 16, fontFamily: 'Cinzel, serif' }}>
               {levelUpData.label}
             </div>
-            {/* Pulse rings */}
             {[1,2,3].map(i => (
               <div key={i} style={{
                 position: 'absolute',
@@ -935,7 +943,8 @@ export default function PlannerClient() {
               showFolderForm={showFolderForm} setShowFolderForm={setShowFolderForm}
               folderForm={folderForm} setFolderForm={setFolderForm}
               createFolder={createFolder} deleteFolder={deleteFolder}
-              session={session} signOut={signOut}
+              session={session}
+              onSignOut={handleSignOut}
               rankInfo={rankInfo} xp={xp} xpProgress={xpProgress} xpNeeded={xpNeeded}
               setShowThemePanel={setShowThemePanel}
               setShowTgPanel={setShowTgPanel}
@@ -961,7 +970,8 @@ export default function PlannerClient() {
             showFolderForm={showFolderForm} setShowFolderForm={setShowFolderForm}
             folderForm={folderForm} setFolderForm={setFolderForm}
             createFolder={createFolder} deleteFolder={deleteFolder}
-            session={session} signOut={signOut}
+            session={session}
+            onSignOut={handleSignOut}
             rankInfo={rankInfo} xp={xp} xpProgress={xpProgress} xpNeeded={xpNeeded}
             setShowThemePanel={setShowThemePanel}
             setShowTgPanel={setShowTgPanel}
@@ -984,7 +994,6 @@ export default function PlannerClient() {
             marginBottom: 36,
             gap: 16,
           }}>
-            {/* Mobile sidebar btn */}
             <button className="mobile-sidebar-btn" onClick={() => setSidebarOpen(true)} style={{
               background: t.surface,
               border: `1px solid ${t.cardBorder}`,
@@ -997,7 +1006,6 @@ export default function PlannerClient() {
               ☰
             </button>
 
-            {/* Title */}
             <div style={{ flex: 1 }}>
               <div style={{
                 fontFamily: 'Cinzel, serif',
@@ -1012,11 +1020,10 @@ export default function PlannerClient() {
                 </span>
               </div>
               <div style={{ color: t.textSub, fontSize: 13, marginTop: 4 }}>
-                {filteredTasks.filter(t => !t.completed).length} активных · {completedCount}/{totalCount} выполнено
+                {filteredTasks.filter(tk => !tk.completed).length} активных · {completedCount}/{totalCount} выполнено
               </div>
             </div>
 
-            {/* Add task button */}
             <button onClick={() => setShowForm(!showForm)} className="shimmer-btn" style={{
               background: `linear-gradient(135deg, ${t.primary}, ${t.primaryEnd})`,
               border: 'none',
@@ -1032,9 +1039,7 @@ export default function PlannerClient() {
               transition: 'all 0.2s',
             }}>
               <span style={{ fontSize: 18 }}>{showForm ? '✕' : '+'}</span>
-              <span style={{ display: 'none', '@media(minWidth:480px)': { display: 'block' } }}>
-                {showForm ? 'Отмена' : 'Задание'}
-              </span>
+              <span>{showForm ? 'Отмена' : 'Задание'}</span>
             </button>
           </div>
 
@@ -1163,7 +1168,6 @@ export default function PlannerClient() {
             <EmptyState t={t} activeFolder={activeFolder} setShowForm={setShowForm} />
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {/* Active tasks */}
               {filteredTasks.filter(task => !task.completed).map((task, i) => (
                 <TaskCard
                   key={task.id}
@@ -1176,7 +1180,6 @@ export default function PlannerClient() {
                 />
               ))}
 
-              {/* Completed section */}
               {filteredTasks.filter(task => task.completed).length > 0 && (
                 <>
                   <div style={{
@@ -1185,7 +1188,7 @@ export default function PlannerClient() {
                   }}>
                     <div style={{ flex: 1, height: 1, background: `${t.cardBorder}` }} />
                     <div style={{ color: t.textMuted, fontSize: 12, letterSpacing: '0.1em' }}>
-                      ВЫПОЛНЕНО ({filteredTasks.filter(t => t.completed).length})
+                      ВЫПОЛНЕНО ({filteredTasks.filter(tk => tk.completed).length})
                     </div>
                     <div style={{ flex: 1, height: 1, background: `${t.cardBorder}` }} />
                   </div>
@@ -1220,7 +1223,8 @@ function Sidebar({
   showFolderForm, setShowFolderForm,
   folderForm, setFolderForm,
   createFolder, deleteFolder,
-  session, signOut,
+  session,
+  onSignOut,   // БАГ #3 ИСПРАВЛЕН: переименовали с signOut → onSignOut чтобы не путать с импортом
   rankInfo, xp, xpProgress, xpNeeded,
   setShowThemePanel, setShowTgPanel,
   isMobile,
@@ -1241,23 +1245,9 @@ function Sidebar({
       animation: isMobile ? 'slideIn 0.3s ease' : 'none',
       overflowY: 'auto',
     }}>
-      {/* Logo */}
+      {/* БАГ #4 ИСПРАВЛЕН: логотип "Chronicle" теперь виден — используем класс logo-text */}
       <div style={{ padding: '0 20px 24px', borderBottom: `1px solid ${t.cardBorder}` }}>
-        <div style={{
-          fontFamily: 'Cinzel, serif',
-          fontSize: 22,
-          fontWeight: 700,
-          letterSpacing: '-0.02em',
-        }}>
-          <span style={{
-            background: `linear-gradient(135deg, ${t.primary}, ${t.primaryEnd})`,
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text',
-          }}>
-            Chronicle
-          </span>
-        </div>
+        <span className="logo-text">Chronicle</span>
         <div style={{ color: t.textMuted, fontSize: 11, marginTop: 2, letterSpacing: '0.05em' }}>
           {session?.user?.email}
         </div>
@@ -1292,7 +1282,6 @@ function Sidebar({
           </div>
         </div>
         <div style={{ color: t.textSub, fontSize: 11, marginBottom: 8 }}>{rankInfo.label}</div>
-        {/* XP bar */}
         <div style={{ background: t.surface, borderRadius: 8, height: 6, overflow: 'hidden' }}>
           <div className="xp-bar-fill" style={{
             height: '100%',
@@ -1355,7 +1344,7 @@ function Sidebar({
                   background: 'none', border: 'none',
                   color: t.textMuted, cursor: 'pointer',
                   fontSize: 14, padding: '2px 4px',
-                  opacity: 0, transition: 'opacity 0.2s',
+                  opacity: 0.6, transition: 'opacity 0.2s',
                 }}>✕</button>
               )}
             </div>
@@ -1452,29 +1441,35 @@ function Sidebar({
         flexDirection: 'column',
         gap: 4,
       }}>
-        <SidebarBtn icon="🎨" label="Тема" onClick={setShowThemePanel} t={t} />
-        <SidebarBtn icon="📬" label="Telegram" onClick={setShowTgPanel} t={t} />
-        <SidebarBtn icon="🚪" label="Выйти" onClick={() => signOut()} t={t} danger />
+        <SidebarBtn icon="🎨" label="Тема" onClick={() => setShowThemePanel(true)} t={t} />
+        <SidebarBtn icon="📬" label="Telegram" onClick={() => setShowTgPanel(true)} t={t} />
+        {/* БАГ #3 ИСПРАВЛЕН: передаём onSignOut напрямую, без лишней обёртки */}
+        <SidebarBtn icon="🚪" label="Выйти" onClick={onSignOut} t={t} danger />
       </div>
     </div>
   )
 }
 
+// БАГ #3 ИСПРАВЛЕН: SidebarBtn больше не вызывает onClick(event) — он вызывает onClick() через стрелочную функцию
 function SidebarBtn({ icon, label, onClick, t, danger }) {
   return (
-    <button onClick={onClick} style={{
-      display: 'flex', alignItems: 'center', gap: 10,
-      padding: '10px 12px',
-      background: 'none',
-      border: 'none',
-      borderRadius: 12,
-      color: danger ? t.danger : t.textSub,
-      cursor: 'pointer',
-      fontSize: 13,
-      width: '100%',
-      textAlign: 'left',
-      transition: 'all 0.15s',
-    }}>
+    <button
+      onClick={() => onClick()}
+      className="sidebar-action-btn"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '10px 12px',
+        background: 'none',
+        border: 'none',
+        borderRadius: 12,
+        color: danger ? t.danger : t.textSub,
+        cursor: 'pointer',
+        fontSize: 13,
+        width: '100%',
+        textAlign: 'left',
+        transition: 'all 0.15s',
+      }}
+    >
       <span>{icon}</span> {label}
     </button>
   )
@@ -1495,7 +1490,7 @@ function TaskCard({ task, t, index, onToggle, onDelete, folders, completed }) {
     <div
       className="task-card"
       style={{
-        background: completed ? `${t.card}` : t.card,
+        background: t.card,
         backdropFilter: 'blur(12px)',
         border: `1px solid ${completed ? t.cardBorder : (days !== null && days <= 1 && !completed ? `${t.danger}44` : t.cardBorder)}`,
         borderRadius: 16,
@@ -1550,7 +1545,6 @@ function TaskCard({ task, t, index, onToggle, onDelete, folders, completed }) {
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-          {/* Priority badge */}
           <span style={{
             fontSize: 11,
             color: priority.color,
@@ -1563,7 +1557,6 @@ function TaskCard({ task, t, index, onToggle, onDelete, folders, completed }) {
             {priority.icon} {priority.label}
           </span>
 
-          {/* Date */}
           {task.due_date && (
             <span style={{ fontSize: 12, color: daysColor, display: 'flex', alignItems: 'center', gap: 4 }}>
               📅 {formatDate(task.due_date)}
@@ -1582,20 +1575,14 @@ function TaskCard({ task, t, index, onToggle, onDelete, folders, completed }) {
             </span>
           )}
 
-          {/* Folder */}
           {folder && (
             <span style={{ fontSize: 12, color: t.textMuted }}>
               {folder.emoji} {folder.name}
             </span>
           )}
 
-          {/* XP badge (not completed) */}
           {!completed && (
-            <span style={{
-              fontSize: 11,
-              color: t.textMuted,
-              marginLeft: 'auto',
-            }}>
+            <span style={{ fontSize: 11, color: t.textMuted, marginLeft: 'auto' }}>
               +{xpReward} XP
             </span>
           )}
@@ -1630,12 +1617,11 @@ function LoadingState({ t }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {[1,2,3].map(i => (
         <div key={i} style={{
-          background: t.card,
+          background: `linear-gradient(90deg, ${t.card} 0%, ${t.surface} 50%, ${t.card} 100%)`,
+          backgroundSize: '200% auto',
           borderRadius: 16,
           height: 72,
           animation: 'shimmer 1.5s ease infinite',
-          background: `linear-gradient(90deg, ${t.card} 0%, ${t.surface} 50%, ${t.card} 100%)`,
-          backgroundSize: '200% auto',
         }} />
       ))}
     </div>
