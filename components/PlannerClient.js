@@ -246,7 +246,7 @@ export default function PlannerClient() {
 
   useEffect(() => {
     applyTheme(t)
-  }, [themeKey])
+  }, [t])
 
   function applyTheme(theme) {
     const root = document.documentElement
@@ -305,7 +305,7 @@ export default function PlannerClient() {
       window.removeEventListener('resize', resize)
       if (animRef.current) cancelAnimationFrame(animRef.current)
     }
-  }, [themeKey])
+  }, [t.primary])
 
   function hexToRgb(hex) {
     const r = parseInt(hex.slice(1,3),16)

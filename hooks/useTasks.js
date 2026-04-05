@@ -23,7 +23,7 @@ export function useTasks() {
     try {
       setLoading(true);
       const data = await apiFetch('GET', '/api/tasks');
-      setTasks(data.tasks);
+      setTasks(Array.isArray(data) ? data : []);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -34,7 +34,7 @@ export function useTasks() {
   useEffect(() => { fetch_(); }, [fetch_]);
 
   const createTask = useCallback(async (data) => {
-    const { task } = await apiFetch('POST', '/api/tasks', data);
+    const task = await apiFetch('POST', '/api/tasks', data);
     setTasks(p => [task, ...p]);
     return task;
   }, []);
@@ -43,7 +43,7 @@ export function useTasks() {
   const updateTask = useCallback(async (id, data) => {
     setTasks(p => p.map(t => t.id === id ? { ...t, ...data } : t));
     try {
-      const { task } = await apiFetch('PATCH', `/api/tasks/${id}`, data);
+      const task = await apiFetch('PATCH', `/api/tasks/${id}`, data);
       setTasks(p => p.map(t => t.id === id ? task : t));
       return task;
     } catch (e) {
@@ -54,7 +54,7 @@ export function useTasks() {
 
   const toggleDone = useCallback((id) => {
     const t = tasks.find(t => t.id === id);
-    return t ? updateTask(id, { done: !t.done }) : null;
+    return t ? updateTask(id, { completed: !t.completed }) : null;
   }, [tasks, updateTask]);
 
   const deleteTask = useCallback(async (id) => {
@@ -67,7 +67,7 @@ export function useTasks() {
     }
   }, [fetch_]);
 
-  const moveTask = useCallback((id, date) => updateTask(id, { date }), [updateTask]);
+  const moveTask = useCallback((id, due_date) => updateTask(id, { due_date }), [updateTask]);
 
   return { tasks, loading, error, refetch: fetch_, createTask, updateTask, toggleDone, deleteTask, moveTask };
 }
