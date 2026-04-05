@@ -342,24 +342,57 @@ export default function PlannerClient() {
   }
 
   // ── Task CRUD ───────────────────────────────────────────────────
-  async function createTask(e) {
+    async function createTask(e) {
     e.preventDefault()
-    if (!formData.title.trim()) { setFormError('Введи название задания'); return }
+    
+    // 1. Валидация
+    if (!formData.title.trim()) { 
+      setFormError('Введи название задания')
+      return 
+    }
     setFormError('')
-    const newTask = { ...formData, title: formData.title.trim() }
+  
+    // 2. Логика определения папки
+    // Если activeFolder — это ID (не системные вкладки), берем его. 
+    // Если системная (all, today, urgent) — ставим null.
+    const currentFolderId = ['all', 'today', 'urgent'].includes(activeFolder) 
+      ? null 
+      : activeFolder
+  
+    const newTask = { 
+      ...formData, 
+      title: formData.title.trim(),
+      folder_id: currentFolderId // Теперь отправляем валидный ID или null
+    }
+  
     try {
       const res = await fetch('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newTask),
       })
+  
+      if (!res.ok) {
+        const errorData = await res.json()
+        setFormError(errorData.message || 'Ошибка при создании')
+        return
+      }
+  
       const created = await res.json()
+      
+      // 3. Обновляем стейт и кеш
       const updated = [created, ...tasks]
       setTasks(updated)
       localStorage.setItem('chronicle_tasks_cache', JSON.stringify(updated))
+  
+      // 4. Сброс формы
       setFormData({ title: '', due_date: '', priority: 'medium', folder_id: '' })
       setShowForm(false)
-    } catch {}
+      
+    } catch (err) {
+      setFormError('Ошибка соединения с сервером')
+      console.error("Create task error:", err)
+    }
   }
 
   async function toggleTask(task) {
